@@ -19,6 +19,8 @@ import io.trino.plugin.session.AbstractTestSessionPropertyManager;
 import io.trino.plugin.session.SessionMatchSpec;
 import io.trino.spi.resourcegroups.ResourceGroupId;
 import io.trino.spi.session.SessionConfigurationContext;
+import org.jdbi.v3.core.Jdbi;
+import org.jdbi.v3.sqlobject.SqlObjectPlugin;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
@@ -26,6 +28,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
 import org.junit.jupiter.api.parallel.Execution;
+import org.testcontainers.containers.JdbcDatabaseContainer;
 
 import java.util.Map;
 import java.util.Optional;
@@ -37,36 +40,38 @@ import static org.junit.jupiter.api.parallel.ExecutionMode.SAME_THREAD;
 
 @TestInstance(PER_CLASS)
 @Execution(SAME_THREAD)
-public class TestDbSessionPropertyManager
+public abstract class BaseTestDbSessionPropertyManager
         extends AbstractTestSessionPropertyManager
 {
+    private static final ResourceGroupId TEST_RG = new ResourceGroupId("rg1");
+
+    private JdbcDatabaseContainer<?> container;
     private DbSessionPropertyManagerConfig config;
+    private Jdbi jdbi;
     private SessionPropertiesDao dao;
     private DbSessionPropertyManager manager;
     private RefreshingDbSpecsProvider specsProvider;
 
-    private TestingMySqlContainer mysqlContainer;
-
-    private static final ResourceGroupId TEST_RG = new ResourceGroupId("rg1");
+    protected abstract JdbcDatabaseContainer<?> startContainer();
 
     @BeforeAll
     public void setup()
     {
-        mysqlContainer = new TestingMySqlContainer();
-        mysqlContainer.start();
+        container = startContainer();
 
         config = new DbSessionPropertyManagerConfig()
-                .setConfigDbUrl(mysqlContainer.getJdbcUrl())
-                .setUsername(mysqlContainer.getUsername())
-                .setPassword(mysqlContainer.getPassword());
+                .setConfigDbUrl(container.getJdbcUrl())
+                .setUsername(container.getUsername())
+                .setPassword(container.getPassword());
 
-        SessionPropertiesDaoProvider daoProvider = new SessionPropertiesDaoProvider(config);
-        dao = daoProvider.get();
+        jdbi = Jdbi.create(container.getJdbcUrl(), container.getUsername(), container.getPassword());
+        dao = jdbi.installPlugin(new SqlObjectPlugin()).onDemand(SessionPropertiesDao.class);
     }
 
     @BeforeEach
     public void setupTest()
     {
+        new FlywayMigration(config).migrate();
         specsProvider = new RefreshingDbSpecsProvider(config, dao);
         manager = new DbSessionPropertyManager(specsProvider);
     }
@@ -74,17 +79,18 @@ public class TestDbSessionPropertyManager
     @AfterEach
     public void teardown()
     {
+        specsProvider.destroy();
         dao.dropSessionPropertiesTable();
         dao.dropSessionClientTagsTable();
         dao.dropSessionSpecsTable();
+        jdbi.useHandle(handle -> handle.execute("DROP TABLE IF EXISTS flyway_schema_history"));
     }
 
     @AfterAll
     public void destroy()
     {
-        specsProvider.destroy();
-        mysqlContainer.close();
-        mysqlContainer = null;
+        container.close();
+        container = null;
     }
 
     @Override
@@ -261,5 +267,29 @@ public class TestDbSessionPropertyManager
         SessionConfigurationContext context1 = new SessionConfigurationContext("foo", Optional.empty(), ImmutableSet.of(), Optional.empty(), TEST_RG);
         assertThat(manager.getSystemSessionProperties(context1)).isEqualTo(ImmutableMap.of());
         assertThat(manager.getCatalogSessionProperties(context1)).isEqualTo(ImmutableMap.of());
+    }
+
+    /**
+     * Values and client tags containing commas must round-trip through the database unchanged. The previous
+     * {@code GROUP_CONCAT}-based read path joined child rows with commas and re-split them, mangling such values.
+     */
+    @Test
+    public void testValuesWithCommas()
+    {
+        dao.insertSpecRow(1, "foo.*", null, null, null, 0);
+        dao.insertClientTag(1, "tag,with,commas");
+        dao.insertSessionProperty(1, "prop_1", "a,b,c");
+        dao.insertSessionProperty(1, "prop_2", "plain");
+
+        specsProvider.refresh();
+        SessionConfigurationContext context = new SessionConfigurationContext(
+                "foo123",
+                Optional.of("src1"),
+                ImmutableSet.of("tag,with,commas"),
+                Optional.empty(),
+                TEST_RG);
+        assertThat(manager.getSystemSessionProperties(context))
+                .containsEntry("prop_1", "a,b,c")
+                .containsEntry("prop_2", "plain");
     }
 }

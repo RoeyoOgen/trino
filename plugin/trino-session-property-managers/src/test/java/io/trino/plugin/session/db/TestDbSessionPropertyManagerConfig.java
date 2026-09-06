@@ -34,7 +34,8 @@ public class TestDbSessionPropertyManagerConfig
                 .setConfigDbUrl(null)
                 .setUsername(null)
                 .setPassword(null)
-                .setSpecsRefreshPeriod(new Duration(10, SECONDS)));
+                .setSpecsRefreshPeriod(new Duration(10, SECONDS))
+                .setRunMigrationsEnabled(true));
     }
 
     @Test
@@ -45,13 +46,15 @@ public class TestDbSessionPropertyManagerConfig
                 .put("session-property-manager.db.username", "bar")
                 .put("session-property-manager.db.password", "pass")
                 .put("session-property-manager.db.refresh-period", "50s")
+                .put("session-property-manager.db.migrations-enabled", "false")
                 .buildOrThrow();
 
         DbSessionPropertyManagerConfig expected = new DbSessionPropertyManagerConfig()
                 .setConfigDbUrl("foo")
                 .setUsername("bar")
                 .setPassword("pass")
-                .setSpecsRefreshPeriod(new Duration(50, TimeUnit.SECONDS));
+                .setSpecsRefreshPeriod(new Duration(50, TimeUnit.SECONDS))
+                .setRunMigrationsEnabled(false);
 
         assertFullMapping(properties, expected);
     }

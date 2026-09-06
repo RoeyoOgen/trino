@@ -14,6 +14,7 @@
 package io.trino.plugin.session.db;
 
 import io.airlift.configuration.Config;
+import io.airlift.configuration.ConfigDescription;
 import io.airlift.configuration.ConfigSecuritySensitive;
 import io.airlift.units.Duration;
 import io.airlift.units.MinDuration;
@@ -28,6 +29,7 @@ public class DbSessionPropertyManagerConfig
     private String username;
     private String password;
     private Duration specsRefreshPeriod = new Duration(10, SECONDS);
+    private boolean runMigrationsEnabled = true;
 
     @NotNull
     public String getConfigDbUrl()
@@ -80,6 +82,19 @@ public class DbSessionPropertyManagerConfig
     public DbSessionPropertyManagerConfig setSpecsRefreshPeriod(Duration specsRefreshPeriod)
     {
         this.specsRefreshPeriod = specsRefreshPeriod;
+        return this;
+    }
+
+    public boolean isRunMigrationsEnabled()
+    {
+        return runMigrationsEnabled;
+    }
+
+    @Config("session-property-manager.db.migrations-enabled")
+    @ConfigDescription("Whether to run migrations on startup")
+    public DbSessionPropertyManagerConfig setRunMigrationsEnabled(boolean runMigrationsEnabled)
+    {
+        this.runMigrationsEnabled = runMigrationsEnabled;
         return this;
     }
 }
